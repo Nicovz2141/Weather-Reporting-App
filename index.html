@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plant Forecast Viewer</title>
+
+    <!-- Google Fonts: Inter for UI labels, JetBrains Mono for data/numbers -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Chart.js for the line graph (CDN, no framework) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <style>
+      /* ─────────────────────────────────────────────
+       DESIGN TOKENS
+       A deliberate palette for a grid-ops tool:
+       dark slate base, electric teal accent,
+       amber for temperature, blue for radiation.
+    ───────────────────────────────────────────── */
+      :root {
+        --bg: #0f1923; /* near-black slate — main background    */
+        --surface: #172130; /* slightly lighter — cards / panels     */
+        --border: #243345; /* subtle dividers                       */
+        --text: #e8edf2; /* primary readable text                 */
+        --muted: #4a6174; /* secondary labels, dim metadata        */
+        --accent: #00d4b4; /* electric teal — the signature colour  */
+        --amber: #f5a623; /* temperature data line                 */
+        --blue: #5b9cf6; /* solar radiation data line             */
+        --error: #f45b69; /* error state                          */
+
+        --mono: "JetBrains Mono", monospace;
+        --sans: "Inter", system-ui, sans-serif;
+      }
+
+      /* ── Reset & base ── */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        min-height: 100vh;
+        padding: 2rem 1rem 4rem;
+      }
+
+      /* ── Layout container ── */
+      .container {
+        max-width: 860px;
+        margin: 0 auto;
+      }
+
+      /* ─────────────────────────────────────────────
+       HEADER
+    ───────────────────────────────────────────── */
+      header {
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 1.25rem;
+        margin-bottom: 2rem;
+      }
+
+      .header-eyebrow {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        text-transform: uppercase;
+        margin-bottom: 0.4rem;
+      }
+
+      header h1 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      header p {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-top: 0.3rem;
+      }
+
+      /* ─────────────────────────────────────────────
+       CONTROLS PANEL (dropdown + button)
+    ───────────────────────────────────────────── */
+      .controls {
+        display: flex;
+        gap: 0.75rem;
+        align-items: flex-end;
+        flex-wrap: wrap;
+        margin-bottom: 2rem;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        flex: 1;
+        min-width: 200px;
+      }
+
+      .field label {
+        font-size: 0.72rem;
+        font-family: var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      /* Dropdown — styled to match the dark theme */
+      select {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 0.9rem;
+        padding: 0.6rem 0.85rem;
+        width: 100%;
+        cursor: pointer;
+        transition: border-color 0.2s;
+        appearance: none; /* remove OS default arrow */
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%234A6174' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.85rem center;
+        padding-right: 2.5rem;
+      }
+
+      select:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      /* Load Forecast button */
+      #load-btn {
+        background: var(--accent);
+        border: none;
+        border-radius: 6px;
+        color: #0f1923; /* dark text on bright bg for contrast */
+        font-family: var(--sans);
+        font-size: 0.9rem;
+        font-weight: 600;
+        padding: 0.6rem 1.5rem;
+        cursor: pointer;
+        transition:
+          opacity 0.2s,
+          transform 0.1s;
+        white-space: nowrap;
+        /* Align button with the bottom of the dropdown */
+        align-self: flex-end;
+      }
+
+      #load-btn:hover:not(:disabled) {
+        opacity: 0.88;
+      }
+      #load-btn:active:not(:disabled) {
+        transform: scale(0.97);
+      }
+
+      /* ── Loading state — button shows a spinner ── */
+      #load-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      /* Spinner inside the button (CSS-only) */
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #0f192380;
+        border-top-color: #0f1923;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ─────────────────────────────────────────────
+       PLANT INFO BADGE
+       Shows lat/lon and plant type when a forecast
+       has been loaded — feels like live metadata.
+    ───────────────────────────────────────────── */
+      #plant-badge {
+        display: none; /* hidden until data loads */
+        align-items: center;
+        gap: 1.5rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        border-radius: 6px;
+        padding: 0.7rem 1rem;
+        margin-bottom: 1.75rem;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--muted);
+        flex-wrap: wrap;
+      }
+
+      #plant-badge span b {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* ─────────────────────────────────────────────
+       ERROR MESSAGE
+    ───────────────────────────────────────────── */
+      #error-msg {
+        display: none;
+        background: #1e1014;
+        border: 1px solid var(--error);
+        border-radius: 6px;
+        color: var(--error);
+        padding: 0.75rem 1rem;
+        font-size: 0.875rem;
+        margin-bottom: 1.5rem;
+      }
+
+      /* ─────────────────────────────────────────────
+       OUTPUT SECTION (chart + table)
+       Hidden until data arrives.
+    ───────────────────────────────────────────── */
+      #output {
+        display: none;
+      }
+
+      /* ── Section heading shared by chart and table ── */
+      .section-label {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.75rem;
+      }
+
+      /* ─────────────────────────────────────────────
+       LINE GRAPH
+    ───────────────────────────────────────────── */
+      .chart-wrapper {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1.25rem 1.25rem 1rem;
+        margin-bottom: 2rem;
+      }
+
+      /* Canvas needs an explicit height for Chart.js */
+      #forecast-chart {
+        width: 100% !important;
+        height: 260px !important;
+      }
+
+      /* Legend dots beside the section label */
+      .chart-legend {
+        display: flex;
+        gap: 1.25rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.78rem;
+        color: var(--muted);
+        font-family: var(--mono);
+      }
+
+      .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      /* ─────────────────────────────────────────────
+       DATA TABLE
+    ───────────────────────────────────────────── */
+      .table-wrapper {
+        overflow-x: auto; /* horizontal scroll on narrow screens */
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--mono);
+        font-size: 0.82rem;
+      }
+
+      thead tr {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+      }
+
+      thead th {
+        padding: 0.65rem 1rem;
+        text-align: left;
+        font-size: 0.7rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      /* Align numeric columns right */
+      thead th:not(:first-child),
+      tbody td:not(:first-child) {
+        text-align: right;
+      }
+
+      tbody tr {
+        border-bottom: 1px solid var(--border);
+        /* Each row starts transparent and fades in — the signature animation */
+        opacity: 0;
+        animation: row-appear 0.25s ease forwards;
+      }
+
+      tbody tr:last-child {
+        border-bottom: none;
+      }
+
+      tbody tr:hover {
+        background: #1d2d3e; /* subtle row highlight on hover */
+      }
+
+      tbody td {
+        padding: 0.55rem 1rem;
+        color: var(--text);
+        white-space: nowrap;
+      }
+
+      /* Time column — slightly dimmer to keep focus on the numbers */
+      tbody td:first-child {
+        color: var(--muted);
+      }
+
+      /* Colour-coded value columns */
+      .val-temp {
+        color: var(--amber);
+      }
+      .val-rad {
+        color: var(--blue);
+      }
+
+      /* Staggered row entrance animation — rows appear one after another */
+      @keyframes row-appear {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      /* Apply increasing delays to each row (set via JS inline style) */
+
+      /* ── Responsive: stack controls on mobile ── */
+      @media (max-width: 520px) {
+        .controls {
+          flex-direction: column;
+        }
+        #load-btn {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- ── HEADER ── -->
+      <header>
+        <div class="header-eyebrow">Grid Operations</div>
+        <h1>Plant Forecast Viewer</h1>
+        <p>24-hour hourly weather forecast for renewable energy sites</p>
+      </header>
+
+      <!-- ──────────────────────────────────────────
+       CONTROLS
+       Dropdown to pick a plant + Load button.
+  ─────────────────────────────────────────── -->
+      <div class="controls">
+        <div class="field">
+          <label for="plant-select">Select plant</label>
+          <!--
+        Each option value is a key that maps to the
+        PLANTS config object defined in the JS below.
+      -->
+          <select id="plant-select">
+            <option value="brazos">Brazos Wind Farm — Austin, TX</option>
+            <option value="mojave">Mojave Solar Array — Los Angeles, CA</option>
+            <option value="permian">Permian Solar Project — West Texas</option>
+          </select>
+        </div>
+
+        <!--
+      The button switches to a "loading" state while the
+      API request is in flight, then reverts when done.
+    -->
+        <button id="load-btn">Load Forecast</button>
+      </div>
+
+      <!-- ── ERROR BANNER (shown on network failure) ── -->
+      <div id="error-msg" role="alert"></div>
+
+      <!-- ── PLANT METADATA BADGE (shown after load) ── -->
+      <div id="plant-badge">
+        <span id="badge-name"></span>
+        <span id="badge-coords"></span>
+        <span id="badge-type"></span>
+        <span id="badge-date"></span>
+      </div>
+
+      <!-- ──────────────────────────────────────────
+       OUTPUT SECTION
+       Chart + Table — hidden until data loads.
+  ─────────────────────────────────────────── -->
+      <div id="output">
+        <!-- LINE GRAPH -->
+        <div class="section-label">24-Hour Trend</div>
+        <div class="chart-wrapper">
+          <div class="chart-legend">
+            <div class="legend-item">
+              <div class="legend-dot" style="background: var(--amber)"></div>
+              Temperature (°C)
+            </div>
+            <div class="legend-item">
+              <div class="legend-dot" style="background: var(--blue)"></div>
+              Direct Normal Irradiance (W/m²)
+            </div>
+          </div>
+          <canvas id="forecast-chart"></canvas>
+        </div>
+
+        <!-- DATA TABLE -->
+        <div class="section-label">Hourly Data</div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Temp (°C)</th>
+                <th>DNI (W/m²)</th>
+              </tr>
+            </thead>
+            <tbody id="table-body">
+              <!-- Rows injected by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <!-- /#output -->
+    </div>
+    <!-- /.container -->
+
+    <script>
+      /* ══════════════════════════════════════════════════════
+     PLANT CONFIGURATION
+     Static data for each plant: name, coordinates, type.
+     Lat/lon values come directly from the scaffold comment.
+  ══════════════════════════════════════════════════════ */
+      const PLANTS = {
+        brazos: {
+          name: "Brazos Wind Farm",
+          region: "Austin, TX",
+          lat: 32.27,
+          lon: -100.92,
+          type: "wind",
+        },
+        mojave: {
+          name: "Mojave Solar Array",
+          region: "Los Angeles, CA",
+          lat: 35.01,
+          lon: -117.31,
+          type: "solar",
+        },
+        permian: {
+          name: "Permian Solar Project",
+          region: "West Texas",
+          lat: 31.42,
+          lon: -103.49,
+          type: "solar",
+        },
+      };
+
+      /* ══════════════════════════════════════════════════════
+     DOM REFERENCES
+     Grab every element we'll touch from one place.
+  ══════════════════════════════════════════════════════ */
+      const selectEl = document.getElementById("plant-select");
+      const loadBtn = document.getElementById("load-btn");
+      const errorMsg = document.getElementById("error-msg");
+      const plantBadge = document.getElementById("plant-badge");
+      const outputEl = document.getElementById("output");
+      const tableBody = document.getElementById("table-body");
+      const chartCanvas = document.getElementById("forecast-chart");
+
+      /* ══════════════════════════════════════════════════════
+     CHART INSTANCE
+     We keep a single Chart.js instance and update its
+     data in-place rather than destroying/recreating it.
+  ══════════════════════════════════════════════════════ */
+      let chartInstance = null;
+
+      /* ══════════════════════════════════════════════════════
+     BUTTON STATE HELPERS
+     Switch the Load button between its normal and
+     loading states without duplicating markup.
+  ══════════════════════════════════════════════════════ */
+      function setLoading(isLoading) {
+        if (isLoading) {
+          /* Show spinner + "Fetching…" text */
+          loadBtn.disabled = true;
+          loadBtn.innerHTML = '<span class="spinner"></span> Fetching…';
+        } else {
+          /* Restore the button to its default state */
+          loadBtn.disabled = false;
+          loadBtn.textContent = "Load Forecast";
+        }
+      }
+
+      /* ══════════════════════════════════════════════════════
+     ERROR DISPLAY HELPER
+  ══════════════════════════════════════════════════════ */
+      function showError(message) {
+        errorMsg.textContent = message;
+        errorMsg.style.display = "block";
+      }
+
+      function clearError() {
+        errorMsg.textContent = "";
+        errorMsg.style.display = "none";
+      }
+
+      /* ══════════════════════════════════════════════════════
+     BUILD OPEN-METEO URL
+     Parameters:
+       - temperature_2m   : hourly air temperature at 2m
+       - direct_normal_irradiance : DNI (W/m²) — direct beam
+         solar radiation hitting a surface perpendicular to the sun
+     forecast_days=1 gives us the next 24 hours.
+  ══════════════════════════════════════════════════════ */
+      function buildApiUrl(plant) {
+        const base = "https://api.open-meteo.com/v1/forecast";
+        const params = new URLSearchParams({
+          latitude: plant.lat,
+          longitude: plant.lon,
+          hourly: "temperature_2m,direct_normal_irradiance",
+          forecast_days: "1",
+        });
+        return `${base}?${params}`;
+      }
+
+      /* ══════════════════════════════════════════════════════
+     FORMAT TIME
+     Converts "2026-05-26T14:00" → "2:00 PM"
+  ══════════════════════════════════════════════════════ */
+      function formatTime(isoString) {
+        /* The API returns local-time strings without a timezone offset.
+       We parse them manually to avoid JS Date's UTC conversion. */
+        const [, timePart] = isoString.split("T");
+        const [hourStr, minStr] = timePart.split(":");
+        const hour = parseInt(hourStr, 10);
+        const ampm = hour < 12 ? "AM" : "PM";
+        const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+        return `${h12}:${minStr} ${ampm}`;
+      }
+
+      /* ══════════════════════════════════════════════════════
+     RENDER LINE CHART
+     Creates or updates the Chart.js dual-axis line graph.
+  ══════════════════════════════════════════════════════ */
+      function renderChart(labels, temps, dni) {
+        /* Common dataset style */
+        const commonLineStyle = {
+          tension: 0.35 /* slight curve — not jagged, not wobbly */,
+          pointRadius: 2,
+          borderWidth: 2,
+          fill: false,
+        };
+
+        const datasets = [
+          {
+            ...commonLineStyle,
+            label: "Temperature (°C)",
+            data: temps,
+            borderColor: "#F5A623" /* --amber */,
+            pointBackgroundColor: "#F5A623",
+            yAxisID: "y" /* left axis */,
+          },
+          {
+            ...commonLineStyle,
+            label: "DNI (W/m²)",
+            data: dni,
+            borderColor: "#5B9CF6" /* --blue */,
+            pointBackgroundColor: "#5B9CF6",
+            yAxisID: "y1" /* right axis */,
+          },
+        ];
+
+        if (chartInstance) {
+          /* Update existing chart in-place (avoids canvas flicker) */
+          chartInstance.data.labels = labels;
+          chartInstance.data.datasets = datasets;
+          chartInstance.update();
+        } else {
+          /* First load — create the chart */
+          chartInstance = new Chart(chartCanvas, {
+            type: "line",
+            data: { labels, datasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: {
+                /* Show tooltip for both datasets when hovering any point */
+                mode: "index",
+                intersect: false,
+              },
+              plugins: {
+                legend: { display: false } /* we have our own custom legend */,
+                tooltip: {
+                  backgroundColor: "#172130",
+                  borderColor: "#243345",
+                  borderWidth: 1,
+                  titleColor: "#4A6174",
+                  bodyColor: "#E8EDF2",
+                  titleFont: { family: "'JetBrains Mono'" },
+                  bodyFont: { family: "'JetBrains Mono'" },
+                  padding: 10,
+                },
+              },
+              scales: {
+                /* X axis: hours */
+                x: {
+                  grid: { color: "#1d2d3e" },
+                  ticks: {
+                    color: "#4A6174",
+                    font: { family: "'JetBrains Mono'", size: 10 },
+                    maxTicksLimit: 12 /* show roughly every 2 hours */,
+                  },
+                },
+                /* Left Y axis: temperature */
+                y: {
+                  position: "left",
+                  grid: { color: "#1d2d3e" },
+                  ticks: {
+                    color: "#F5A623",
+                    font: { family: "'JetBrains Mono'", size: 10 },
+                    callback: (v) => `${v}°`,
+                  },
+                },
+                /* Right Y axis: DNI */
+                y1: {
+                  position: "right",
+                  grid: {
+                    drawOnChartArea: false,
+                  } /* don't double up gridlines */,
+                  ticks: {
+                    color: "#5B9CF6",
+                    font: { family: "'JetBrains Mono'", size: 10 },
+                    callback: (v) => `${v}`,
+                  },
+                },
+              },
+            },
+          });
+        }
+      }
+
+      /* ══════════════════════════════════════════════════════
+     RENDER TABLE
+     Injects <tr> rows into the table body.
+     Each row gets an animation-delay so they stream in
+     one at a time (the signature visual effect).
+  ══════════════════════════════════════════════════════ */
+      function renderTable(times, temps, dni) {
+        tableBody.innerHTML = ""; /* clear any previous data */
+
+        times.forEach((t, i) => {
+          const row = document.createElement("tr");
+
+          /* Staggered entrance: row i waits i * 20ms before appearing */
+          row.style.animationDelay = `${i * 18}ms`;
+
+          row.innerHTML = `
+        <td>${formatTime(t)}</td>
+        <td class="val-temp">${temps[i] !== null ? temps[i].toFixed(1) : "—"}</td>
+        <td class="val-rad">${dni[i] !== null ? Math.round(dni[i]) : "—"}</td>
+      `;
+
+          tableBody.appendChild(row);
+        });
+      }
+
+      /* ══════════════════════════════════════════════════════
+     UPDATE PLANT BADGE
+     Shows plant metadata above the chart.
+  ══════════════════════════════════════════════════════ */
+      function updateBadge(plant, plantKey) {
+        /* Format today's date nicely */
+        const today = new Date().toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+
+        document.getElementById("badge-name").innerHTML =
+          `<b>${plant.name}</b>`;
+        document.getElementById("badge-coords").innerHTML =
+          `<b>${plant.lat}° N, ${Math.abs(plant.lon)}° W</b>`;
+        document.getElementById("badge-type").innerHTML =
+          `Type: <b>${plant.type.toUpperCase()}</b>`;
+        document.getElementById("badge-date").innerHTML =
+          `Forecast: <b>${today}</b>`;
+
+        plantBadge.style.display = "flex";
+      }
+
+      /* ══════════════════════════════════════════════════════
+     MAIN FETCH HANDLER
+     Called when the user clicks "Load Forecast".
+  ══════════════════════════════════════════════════════ */
+      async function loadForecast() {
+        /* 1. Read which plant is selected */
+        const plantKey = selectEl.value;
+        const plant = PLANTS[plantKey];
+
+        /* 2. Reset UI state */
+        clearError();
+        setLoading(true);
+        outputEl.style.display = "none";
+        plantBadge.style.display = "none";
+
+        try {
+          /* 3. Build the API URL and fetch */
+          const url = buildApiUrl(plant);
+          const response = await fetch(url);
+
+          /* Check for HTTP-level errors (4xx, 5xx) */
+          if (!response.ok) {
+            throw new Error(
+              `API returned ${response.status} ${response.statusText}`,
+            );
+          }
+
+          /* 4. Parse JSON */
+          const data = await response.json();
+          const hourly = data.hourly;
+
+          /* Validate the response has the expected shape */
+          if (
+            !hourly ||
+            !hourly.time ||
+            !hourly.temperature_2m ||
+            !hourly.direct_normal_irradiance
+          ) {
+            throw new Error(
+              "Unexpected API response format. Please try again.",
+            );
+          }
+
+          /* 5. Extract the three arrays we need */
+          const times = hourly.time;
+          const temps = hourly.temperature_2m;
+          const dni = hourly.direct_normal_irradiance;
+
+          /* 6. Build short labels for the chart X-axis */
+          const chartLabels = times.map(formatTime);
+
+          /* 7. Render chart, table, and badge */
+          renderChart(chartLabels, temps, dni);
+          renderTable(times, temps, dni);
+          updateBadge(plant, plantKey);
+
+          /* 8. Reveal the output section */
+          outputEl.style.display = "block";
+        } catch (err) {
+          /*
+        Covers network failures (fetch rejects) and the explicit throws above.
+        We surface the message directly — analysts need actionable info.
+      */
+          if (err.name === "TypeError") {
+            /* TypeError is what fetch throws on a network error (offline, CORS block, etc.) */
+            showError(
+              "Network error: could not reach the forecast API. Check your connection and try again.",
+            );
+          } else {
+            showError(`Error: ${err.message}`);
+          }
+        } finally {
+          /* Always restore the button, whether the request succeeded or failed */
+          setLoading(false);
+        }
+      }
+
+      /* ══════════════════════════════════════════════════════
+     EVENT LISTENER
+     Wire up the button click.
+  ══════════════════════════════════════════════════════ */
+      loadBtn.addEventListener("click", loadForecast);
+
+      /*
+    Optional quality-of-life: also trigger on Enter key
+    when the dropdown is focused.
+  */
+      selectEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") loadForecast();
+      });
+    </script>
+  </body>
+</html>
